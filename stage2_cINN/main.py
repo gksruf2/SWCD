@@ -25,10 +25,14 @@ def trainer(cINN, encoder, epoch, data_loader, logger, optimizer, loss_func, opt
     inp_string = 'Epoch {} || Loss: --- '.format(epoch)
     data_iter.set_description(inp_string)
     for image_idx, file_dict in enumerate(data_iter):
-
+        # seq shape : (BS, frame=17, rgb, 64, 64)
         seq = file_dict["seq"].type(torch.FloatTensor).cuda()
-
+        
+        # post: z_sampling, shape : (BS, 64)
         post, mean, *_ = encoder(seq[:, 1:].transpose(1, 2))
+        
+        # cond shape : [(BS, rgb, 64, 64)]
+        # cond shape (endpoint) : [(BS, rgb, 64, 64), (BS, 3(x,y,z))]
         cond = [seq[:, 0]] if not opt.Training['control'] else [seq[:, 0],  file_dict["cond"]]
         gauss, logdet  = cINN(post.reshape(post.size(0), -1).detach(), cond)
         loss = loss_func(gauss, logdet, logger, mode='train')
@@ -100,7 +104,7 @@ def main(opt):
                                         control=opt.Training['control']).cuda()
 
     ## Load Pytorch I3D for logging
-    I3D     = FVD_logging.load_model().cuda() if config.Training['FVD']=='FVD' else DTFVD_Score.load_model(16).cuda()
+    #I3D     = FVD_logging.load_model().cuda() if config.Training['FVD']=='FVD' else DTFVD_Score.load_model(16).cuda()
 
     ###### Define Optimizer
     loss_func = loss.FlowLoss()
@@ -108,6 +112,26 @@ def main(opt):
                                  weight_decay=opt.Training['weight_decay'], amsgrad=opt.Training['amsgrad'])
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=opt.Training['step_size'],
                                                 gamma=opt.Training['gamma'])
+
+    """====================Reload model if needed ========================"""
+    if opt.Training['reload_path']:
+        pretrained_network = torch.load(opt.Training['reload_path'] + '/checkpoint_best_val.pth')
+        _ = network.load_state_dict(pretrained_network['state_dict'])
+
+        start_epoch = pretrained_network['epoch']
+
+        LR = optimizer['lr']
+        
+        checkpoint_info = "Load checkpoint from '%s/latest_checkpoint.pth.tar' with LR %.8f" % (
+            opt.Training['reload_path'], LR)
+        
+        optimizer.load_state_dict(pretrained_network['optim_state_dict'])
+        scheduler.load_state_dict(pretrained_network['scheduler_state_dict'])
+    else:
+        start_epoch = 0
+        checkpoint_info = "Starting from scratch with LR %.8f" % (opt.Training['lr'])
+
+    print(checkpoint_info)
 
     """==================== Dataloader ========================"""
     dloader = get_loader(opt.Data['dataset'], control=opt.Training['control'])
@@ -157,7 +181,7 @@ def main(opt):
     full_log_eval = aux.CSVlogger(save_path + "/log_per_epoch_eval.csv", ["Epoch", "Time", "LR"] + logging_keys)
 
     """=================== Start training ! ==========================="""
-    epoch_iterator = tqdm(range(0, opt.Training['n_epochs']), ascii=True, position=1)
+    epoch_iterator = tqdm(range(start_epoch, opt.Training['n_epochs']), ascii=True, position=1)
     best_PFVD = 999
 
     for epoch in epoch_iterator:
@@ -174,10 +198,12 @@ def main(opt):
 
         # ### Evaluation of PFVD score + log video samples
         epoch_iterator.set_description('Evaluation of FVD score ...')
-        PFVD = aux.evaluate_FVD_prior(eval_data_loader, network, generator, I3D, config.Decoder['z_dim'], opt, epoch,
+        PFVD = aux.evaluate_FVD_prior(eval_data_loader, network, generator, None, config.Decoder['z_dim'], opt, epoch,
                                       config.Training['FVD'], opt.Training['control'])
         wandb.log({'FVD': PFVD})
 
+        save_dict = aux.get_save_dict(network, optimizer, scheduler, epoch)
+        
         ## Save checkpoints
         if PFVD < best_PFVD:
             torch.save(save_dict, save_path + '/checkpoint_best_val.pth')

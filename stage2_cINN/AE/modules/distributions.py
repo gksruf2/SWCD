@@ -5,7 +5,9 @@ import numpy as np
 
 class DiagonalGaussianDistribution(object):
     def __init__(self, parameters, deterministic=False):
+        # parameters shape : (BS, 128, 1, 1)
         self.parameters = parameters
+        # self.mean shape : (BS, 64, 1, 1)
         self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
         self.logvar = torch.clamp(self.logvar, -30.0, 10.0)
         self.deterministic = deterministic

@@ -34,6 +34,7 @@ def trainer(opt, network, enc, disc_t, disc_s, logger, epoch, data_loader, optim
         seq = file_dict["seq"].type(torch.FloatTensor).cuda()
 
         ## Compute Loss
+        # sequnce : [seq_gen.detach().cpu(), seq_orig.cpu()]
         sequences = backward(network, enc, disc_t, disc_s, seq, optimizer, epoch, logger)
 
         ## plot losses in console
@@ -86,6 +87,52 @@ def validator(opt, network, enc, logger, epoch, data_loader, backward):
     del sequences
     torch.cuda.empty_cache()
 
+from metrics.PyTorch_FVD.FVD_logging import calculate_FVD as calc_FVD
+from metrics.DTFVD.DTFVD_Score import calculate_FVD as calc_DTFVD
+
+def evaluate_FVD_posterior(dloader, model, encoder, mode):
+    _ = model.eval()
+    seq_g, seq_o = [], []
+    data_iter = tqdm(dloader, position=2, ascii=True)
+    inp_string = 'FVD | Eval'
+    data_iter.set_description(inp_string)
+
+    with torch.no_grad():
+        for image_idx, file in enumerate(data_iter):
+            seq = file["seq"].type(torch.FloatTensor).cuda()
+            motion, *_ = encoder(seq[:, 1:].transpose(1, 2))
+            seq_gen = model(seq[:, 0], motion)
+            #seq_g.append(seq_gen.cpu())
+            #seq_o.append(seq[:, 1:].cpu())
+            seq_g.append(seq_gen)
+            seq_o.append(seq[:, 1:])
+            inp_string = 'FVD | Eval | index: {}'.format(image_idx)
+            data_iter.set_description(inp_string)
+            torch.cuda.empty_cache()
+
+
+    seq_gen  = torch.cat(seq_g, dim=0)
+    seq_orig = torch.cat(seq_o, dim=0)
+
+    seq_gen1, seq_gen2, seq_gen3, seq_gen4  = torch.chunk(seq_gen, 4, dim=0)
+    seq_orig1, seq_orig2, seq_orig3, seq_orig4 = torch.chunk(seq_orig, 4, dim=0)
+
+    torch.cuda.empty_cache()
+
+    inp_string = 'before calc'
+    data_iter.set_description(inp_string)
+    print(inp_string)
+    #FVD = calc_FVD(None, seq_orig, seq_gen, batch_size=1)
+    #return FVD
+    FVD1 = calc_FVD(None, seq_orig1.cpu(), seq_gen1.cpu(), batch_size=1)
+    FVD2 = calc_FVD(None, seq_orig2.cpu(), seq_gen2.cpu(), batch_size=1)
+    FVD3 = calc_FVD(None, seq_orig3.cpu(), seq_gen3.cpu(), batch_size=1)
+    FVD4 = calc_FVD(None, seq_orig4.cpu(), seq_gen4.cpu(), batch_size=1)
+    inp_string = 'FVD1: {} | FVD2: {} | FVD3: {} | FVD4: {}'.format(FVD1, FVD2, FVD3, FVD4)
+    data_iter.set_description(inp_string)
+    print(inp_string)
+    return sum([FVD1, FVD2, FVD3])/3
+
 def main(opt):
 
     """================= Create Model, Optimizer and Scheduler =========================="""
@@ -93,7 +140,7 @@ def main(opt):
     disc_s  = patch_disc.NLayerDiscriminator(opt.Discriminator_Patch).cuda()
     disc_t  = resnet3D.Discriminator(opt.Discriminator_Temporal).cuda()
     encoder = resnet3D.Encoder(opt.Encoder).cuda()
-    I3D     = FVD_logging.load_model().cuda() if opt.Training['FVD']=='FVD' else DTFVD_Score.load_model(16).cuda()
+    #I3D     = FVD_logging.load_model().cuda() if opt.Training['FVD']=='FVD' else DTFVD_Score.load_model(16).cuda()
 
     backward = Backward(opt)
     optimizer_AE = torch.optim.Adam(list(decoder.parameters()) + list(encoder.parameters()), lr=opt.Training['lr'],
@@ -199,6 +246,7 @@ def main(opt):
     epoch_iterator = tqdm(range(start_epoch, opt.Training['n_epochs']), ascii=True, position=1)
     best_PFVD = 999
 
+    torch.cuda.empty_cache()
     for epoch in epoch_iterator:
         epoch_time = time.time()
         lr = [group['lr'] for group in optimizer_2Dnet.param_groups][0]
@@ -210,10 +258,12 @@ def main(opt):
         ## Validation
         epoch_iterator.set_description('Validating...')
         validator(opt, decoder, encoder, log_test, epoch, eval_data_loader, backward)
-
         ## Evaluate DTFVD
         epoch_iterator.set_description('Validating (DT)FVD score ...')
-        PFVD = aux.evaluate_FVD_posterior(eval_data_loader, decoder, encoder, I3D, opt.Training['FVD'])
+        #PFVD = evaluate_FVD_posterior(eval_data_loader, decoder, encoder, opt.Training['FVD'])
+        #wandb.log({'FVD': PFVD})
+        #PFVD = evaluate_FVD_posterior(eval_data_loader, decoder, encoder, opt.Training['FVD'])
+        PFVD = aux.evaluate_FVD_posterior(eval_data_loader, decoder, encoder, None, opt.Training['FVD'])
         wandb.log({'FVD': PFVD})
 
         save_dict_GEN = aux.get_save_dict(decoder, optimizer_AE, scheduler_AE, epoch)
@@ -256,5 +306,9 @@ if __name__ == '__main__':
     os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"]=args.gpu
 
+    """import tensorflow as tf
+    tf.config.experimental.set_memory_growth(tf.config.experimental.list_physical_devices("GPU")[0], True)
+    """
+    
     aux.set_seed(42)
     main(conf)

@@ -46,15 +46,15 @@ Training:
   n_epochs: 55
   lr: 2e-4
   workers: 20
-  bs: 10
-  bs_eval: 10
+  bs: 8
+  bs_eval: 1
   verbose_idx: 30
   weight_decay: 1e-5
   lr_gamma: 0.98
   FVD: 'FVD'
-  savename: 'INSERT_NAME_HERE'
-  save_path: 'INSERT_PATH_HERE'
-  reload_path: ''
+  savename: '20230418'
+  save_path: '/data/gksruf293/swcd/image2video-synthesis-using-cINNs-main/stage1_VAE/save/'
+  reload_path: '/data/gksruf293/swcd/image2video-synthesis-using-cINNs-main/stage1_VAE/save/Stage1_BAIR_Date-2023-4-17-0-35-42_20230328'
 
 Data:
   sequence_length: 17
@@ -62,7 +62,7 @@ Data:
   dataset: 'BAIR'
   reverse: False
   aug: True
-  data_path: 'INSERT_DATA_PATH_HERE'
+  data_path: '/data/gksruf293/swcd/image2video-synthesis-using-cINNs-main/download_bair/'
   Augmentation:
     brightness: 0.1
     contrast: 0.1
@@ -71,6 +71,6 @@ Data:
     prob_hflip: 0.5
 
 Logging:
-  entity: 'INSERT_WANDB_NAME'
-  project: "INSERT_PROJECT_NAME"
+  entity: '0d96660e1ccd97c40207a831c91de88b8763fa7b'
+  project: "SWCD"
   mode: 'online'

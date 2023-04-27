@@ -46,26 +46,44 @@ class SupervisedTransformer(nn.Module):
         sample = self.reverse(z_tilde, cond)
         return sample
 
-    def embed_pos(self, pos):
+    def embed_pos(self, pos):   # pos: position, (BS, (x,y,z))
+        # minmax 정규화된 x, y, z의 위치정보를 cond_size에 맞추어 분포
         pos = pos * self.cond_size - 1e-4
-        embed1 = torch.zeros((pos.size(0), self.cond_size))
+        # embed shape : (BS, cond_size = 10)
+        embed1 = torch.zeros((pos.size(0), self.cond_size)) # BS x cond_size(=10)
         embed2 = torch.zeros((pos.size(0), self.cond_size))
         embed3 = torch.zeros((pos.size(0), self.cond_size))
+        # 위치정보를 1d로 입력
         embed1[np.arange(embed1.size(0)), pos[:, 0].long()] = 1
         embed2[np.arange(embed2.size(0)), pos[:, 1].long()] = 1
         embed3[np.arange(embed3.size(0)), pos[:, 2].long()] = 1
+        # return shape : (BS, cond_size*3)
         return torch.cat((embed1, embed2, embed3), dim=1).cuda()
 
     def forward(self, input, cond, reverse=False, train=False):
-
+        """
+        input (v or z) shape    : (BS, 64)
+        cond (x_0) shape        : (BS, rgb, 64, 64)
+        cond (end) shape        : (BS, 3(xyz)) 
+        """
         with torch.no_grad():
+            # embedder.encode shape : (BS, 64, 1, 1)
+            # reshaped shape : (BS, 64)
             embed = self.embedder.encode(cond[0]).mode().reshape(input.size(0), -1).detach()
             embed = torch.cat((embed, self.embed_pos(cond[1])), dim=1) if self.control else embed
+            # cond로 frame 별 x, y, z정보가 scala 값으로 주어진다면
+            # x, y, z정보를 1d의 tensor로 만들어 embed와 concat
+            # embed shape : (BS, 64)
+            # embed (end) shape : (BS, 94)
 
-        if reverse:
-            return self.reverse(input, embed)
-
+        if reverse:  
+            # T(v, x_0), v shape : (BS, 64), x_0 shape : (BS, 94)
+            return self.reverse(input, embed)   
+        
+        # T^-1(z, x_0), z shape : (BS, 64), x_0 shape : (BS, 94)
+        # out shape : (BS, 64, 1, 1)
         out, logdet = self.flow(input, embed)
+        
 
         return out, logdet
 

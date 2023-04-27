@@ -5,7 +5,7 @@ from torch.nn.utils import spectral_norm
 
 ######################################################################################################
 ########## 3D-ConvNet Implementation adapted from https://github.com/tomrunia/PyTorchConv3D ##########
-
+# Encoder
 def resnet10():
     """Constructs a ResNet-18 model.
     """
@@ -159,11 +159,10 @@ class Encoder(nn.Module):
         assert len(channels) - 1 == len(stride_t)
         assert len(channels) - 1 == len(stride_s)
         block, layers = __possible_resnets[type_]()
-
         self.conv1   = nn.Conv3d(3, channels[0], kernel_size=(3, 7, 7), stride=(2, 2, 2), padding=(1, 3, 3), bias=False)
         self.norm1   = nn.GroupNorm(num_groups=16, num_channels=channels[0])
         self.relu    = nn.ReLU(inplace=True)
-        if self.use_max_pool:
+        if self.use_max_pool:   # Encoder : False, Decoder : True
             self.maxpool = nn.MaxPool3d(kernel_size=(3, 3, 3), stride=(1, 2, 2), padding=1)
 
         self.layer = []
@@ -171,8 +170,8 @@ class Encoder(nn.Module):
             self.layer.append(self._make_layer(block, ch, layers[i], stride=stride_s[i], stride_t=stride_t[i]))
         self.layer = nn.Sequential(*self.layer)
 
-        self.conv_mu = nn.Conv2d(channels[-1], z_dim, 4, 1, 0)
-        self.conv_var = nn.Conv2d(channels[-1], z_dim, 4, 1, 0)
+        self.conv_mu = nn.Conv2d(channels[-1], z_dim, 4, 1, 0)  # kernel_size=4, stride=1, padding=0
+        self.conv_var = nn.Conv2d(channels[-1], z_dim, 4, 1, 0) # z_dim = 64
 
 
         for m in self.modules():
@@ -194,28 +193,47 @@ class Encoder(nn.Module):
 
         layers = [block(self.inplanes, planes, stride, stride_t, downsample, self.use_spectral_norm)]
         self.inplanes = planes * block.expansion
-        for _ in range(1, blocks):
+        for _ in range(1, blocks):  # resnet 18에서 blocks = 2
             layers.append(block(self.inplanes, planes))
 
         return nn.Sequential(*layers)
 
     def reparameterize(self, emb):
+        """
+        Encoder에서 z~N(mean(X), sigma(X))를 그대로 Gradient descent할 수 없기 때문에
+        보조 noise variable e를 사용한다.
+        e ~ N(0, I)에서 sampling 한 e에 대해
+        z = mean(X) + sigma(X)^(0.5)*e 로 나타낼 수 있다.
+        이러면 z가 더이상 random node가 아니기 때문에
+        z를 mean(X)와 sigma(X)에 대해 미분이 가능하다.
+        """
+        # emb shape : (BS, 512, 4, 4)
+        # mu, logvar shape : (BS, 64)
         mu, logvar = self.conv_mu(emb).reshape(emb.size(0), -1), self.conv_var(emb).reshape(emb.size(0), -1)
+        # eps : (BS, 64) 크기로 N(0, 1)을 샘플링 (e)
         eps = torch.FloatTensor(logvar.size()).normal_().cuda()
+        # std : sigma^(0.5)
         std = logvar.mul(0.5).exp_()
+        # z_sampling , mean, var
         return eps.mul(std).add_(mu), mu, logvar
 
     def forward(self, x):
+        # seq shape : (BS, rgb, frame-1, 64, 64)
         if x.size(1) > x.size(2):
             x = x.transpose(1, 2)
-        x = self.conv1(x)
+        x = self.conv1(x)   #(BS, 3, 16, 64, 64)->(BS, 64, 8, 32, 32)
         x = self.norm1(x)
         x = self.relu(x)
-        if self.use_max_pool:
+        if self.use_max_pool:   # Encoder : False, Decoder : True
             x = self.maxpool(x)
 
         x = self.layer(x)
+        # layer1 : (BS, 128, 8, 32, 32)
+        # layer2 : (BS, 256, 4, 16, 16)
+        # layer3 : (BS, 512, 2, 8, 8)
+        # layer4 : (BS, 512, 1, 4, 4)
 
+        # result : z_sampling , mean, var
         return self.reparameterize(x.squeeze(2))
 
 

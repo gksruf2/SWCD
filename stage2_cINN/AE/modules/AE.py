@@ -23,7 +23,7 @@ class ClassUp(nn.Module):
         self.main = nn.Sequential(*layers)
 
     def forward(self, x):
-        x = self.main(x.squeeze(-1).squeeze(-1))
+        x = self.main(x.squeeze(-1).squeeze(-1))    # (BS, 64, 1, 1) -> (BS, 64) -> (BS, 1000)
         x = torch.nn.functional.softmax(x, dim=1)
         return x
 
@@ -36,7 +36,7 @@ class BigGANDecoderWrapper(nn.Module):
         self.do_pre_processing = config['pre_process']
         image_size = config['in_size']
         use_actnorm = config['use_actnorm_in_dec']
-        pretrained = config['pretrained']
+        pretrained = config['pretrained']       # pretrained가 없는데...? 에러가 왜 안나지
         class_embedding_dim = 1000
 
         self.map_to_class_embedding = ClassUp(z_dim, depth=2, hidden_dim=2*class_embedding_dim,
@@ -47,7 +47,7 @@ class BigGANDecoderWrapper(nn.Module):
                                                        n_class=class_embedding_dim)
 
     def forward(self, x, labels=None):
-        emb = self.map_to_class_embedding(x)
+        emb = self.map_to_class_embedding(x)    # emb : (BS, 64, 1, 1) -> (BS, 1000)
         x = self.decoder(x, emb)
         return x
 
@@ -100,7 +100,7 @@ class ResnetEncoder(nn.Module):
         self.config = config
         z_dim = config['z_dim']
         self.be_deterministic = config['deterministic']
-        ipt_size = config['in_size']
+        ipt_size = config['in_size']    # 64
         type_ = config['encoder_type']
         norm_layer = _norm_options[config['norm']]
         self.be_deterministic = config['deterministic']
@@ -115,8 +115,8 @@ class ResnetEncoder(nn.Module):
 
         size_pre_fc = self._get_spatial_size(ipt_size)
         assert size_pre_fc[2]==size_pre_fc[3], 'Output spatial size is not quadratic'
-        spatial_size = size_pre_fc[2]
-        num_channels_pre_fc = size_pre_fc[1]
+        spatial_size = size_pre_fc[2]           # 2
+        num_channels_pre_fc = size_pre_fc[1]    # 512
         # replace last fc
         self.model.fc = DenseEncoderLayer(0,
                                           spatial_size=spatial_size,
@@ -124,20 +124,28 @@ class ResnetEncoder(nn.Module):
                                           in_channels=num_channels_pre_fc)
 
     def forward(self, x):
-        features = self.features(x)
+        # x shape : (BS, 3, H=64, W=64)
+        features = self.features(x) 
+        # features shape : (BS, 512, 2, 2)
         encoding = self.model.fc(features)
+        # encoding shape : (BS, 128, 1, 1)
         return encoding
 
     def features(self, x):
-        x = self.model.conv1(x)
-        x = self.model.bn1(x)
-        x = self.model.relu(x)
-        x = self.model.maxpool(x)
-        x = self.model.layer1(x)
-        x = self.model.layer2(x)
-        x = self.model.layer3(x)
-        x = self.model.layer4(x)
-        x = self.model.avgpool(x)
+        # non-trained torchvision resnet50
+        # x shape : (BS, 3, H=64, W=64)
+        # ResnetEncoder size_pre_fc : (1, 3, 64, 64)
+        x = self.model.conv1(x) # 64 32 32
+        x = self.model.bn1(x)   # 
+        x = self.model.relu(x)  #
+        x = self.model.maxpool(x)   # 64 16 16
+        x = self.model.layer1(x)    # 64 16 16
+        x = self.model.layer2(x)    # 128 8 8
+        x = self.model.layer3(x)    # 256 4 4
+        x = self.model.layer4(x)    # 512 2 2
+        x = self.model.avgpool(x)   # 512 2 2
+        # x shape : (BS, 512, 2, 2)
+        # ResnetEncoder size_pre_fc : (1, 512, 2, 2)
         return x
 
     def post_features(self, x):
@@ -145,8 +153,9 @@ class ResnetEncoder(nn.Module):
         return x
 
     def _get_spatial_size(self, ipt_size):
+        # ipt size = 64
         x = torch.randn(1, 3, ipt_size, ipt_size)
-        return self.features(x).size()
+        return self.features(x).size()  # (1, 512, 2, 2)
 
     @property
     def mean(self):
@@ -161,8 +170,10 @@ class ResnetEncoder(nn.Module):
         return [3, 224, 224]
 
     def encode(self, input):
-        h = input
+        # input shape : (BS, 3, H=64, W=64)
+        h = input   # h is x_0
         h = self.forward(h)
+        # h shape : (BS, 128, 1, 1)
         return DiagonalGaussianDistribution(h, deterministic=self.be_deterministic)
 
 
@@ -176,7 +187,9 @@ class BigAE(nn.Module):
         self.decoder = BigGANDecoderWrapper(config=config)
 
     def encode(self, input):
+        # h shape : (BS, rgb, 64, 64)
         h = input
+        # h shape : (BS, 128, 1, 1)
         h = self.encoder(h)
         return DiagonalGaussianDistribution(h, deterministic=self.be_deterministic)
 
@@ -186,7 +199,10 @@ class BigAE(nn.Module):
         return h
 
     def forward(self, input):
+        # input shape : (BS, rgb, 64, 64)
+        # p shape : (BS, 128, 1, 1)
         p = self.encode(input)
+        # p.mode shape : (BS, 64, 1, 1), self.mean
         img = self.decode(p.mode())
         return img, p.mode(), p
 

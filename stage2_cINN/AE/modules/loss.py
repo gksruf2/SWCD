@@ -46,7 +46,8 @@ class Loss(nn.Module):
 
         if training:
             opt_gen, opt_disc = optimizers
-        recon, _, p = generator(inp)
+        # G : BigAE, recon : reconstructed image, p : latent vector
+        recon, _, p = generator(inp)    
         rec_loss = torch.abs(inp.contiguous() - recon.contiguous())
         p_loss = self.vgg_loss(inp.contiguous(), recon.contiguous())
         rec_loss = rec_loss + p_loss

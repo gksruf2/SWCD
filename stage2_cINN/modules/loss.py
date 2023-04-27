@@ -24,5 +24,5 @@ class FlowLoss(nn.Module):
         wandb.log(loss_dic)
         return loss
 
-def nll(sample):
+def nll(sample):    # negative log-likelihood
     return 0.5 * torch.sum(torch.pow(sample, 2), dim=[1, 2, 3])

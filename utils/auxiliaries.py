@@ -2,7 +2,7 @@ import numpy as np, csv
 import torch, os, random
 import imageio, wandb
 from tqdm import tqdm
-from metrics.PyTorch_FVD.FVD_logging import calculate_FVD as calc_FVD
+from metrics.PyTorch_FVD.FVD_logging import calculate_FVD as calc_FVD, compute_activations, calculate_frechet_distance
 from metrics.DTFVD.DTFVD_Score import calculate_FVD as calc_DTFVD
 
 def get_save_dict(model, optmizer, scheduler, epoch):
@@ -64,9 +64,7 @@ def set_seed(seed):
 
 ### Evaluate FVD score using PyTorch FVD during training of posterior (1st stage- reconstruction) and prior (2nd stage)
 def evaluate_FVD_posterior(dloader, model, encoder, I3D, mode):
-
     seq_g, seq_o = [], []
-
     with torch.no_grad():
         for _, file in enumerate(dloader):
             seq = file["seq"].type(torch.FloatTensor).cuda()
@@ -80,7 +78,33 @@ def evaluate_FVD_posterior(dloader, model, encoder, I3D, mode):
 
     torch.cuda.empty_cache()
 
-    FVD = calc_FVD(I3D, seq_orig, seq_gen, 20) if mode=='FVD' else calc_DTFVD(I3D, seq_orig, seq_gen, 40, True)
+    seq_gen1, seq_gen2, seq_gen3, seq_gen4  = torch.chunk(seq_gen, 4, dim=0)
+    seq_orig1, seq_orig2, seq_orig3, seq_orig4 = torch.chunk(seq_orig, 4, dim=0)
+    
+    assert (seq_gen1.shape == seq_orig1.shape) and (seq_gen2.shape == seq_orig2.shape) and \
+            (seq_gen3.shape == seq_orig3.shape) and (seq_gen4.shape == seq_orig4.shape), \
+        'n_sample error'
+    
+    batch_size=1
+    #print("shape", seq_gen1.shape) #torch.Size([704, 16, 3, 64, 64])
+
+    act1_orig, act1_gen = compute_activations(seq_gen1, seq_orig1, batch_size=batch_size) #print("act1_orig", act1_orig.shape) #act1_orig (704, 400)
+    act2_orig, act2_gen = compute_activations(seq_gen2, seq_orig2, batch_size=batch_size)     #print("act1_gen", act1_gen.shape)   #act1_gen (704, 400)
+    act3_orig, act3_gen = compute_activations(seq_gen3, seq_orig3, batch_size=batch_size)     #print("act4_orig", act4_orig.shape) #act4_orig (704, 400)
+    act4_orig, act4_gen = compute_activations(seq_gen4, seq_orig4, batch_size=batch_size)     #print("act4_gen", act4_gen.shape)   #act4_gen (704, 400)
+
+    act_orig = np.concatenate((act1_orig, act2_orig, act3_orig, act4_orig), axis=0)
+    del act1_orig, act2_orig, act3_orig, act4_orig
+    act_gen = np.concatenate((act1_gen, act2_gen, act3_gen, act4_gen), axis=0)
+    del act1_gen, act2_gen, act3_gen, act4_gen
+    #print("act_orig", act_orig.shape)  #act_orig (2816, 400)
+    #print("act_gen", act_gen.shape)    #act_gen (2816, 400)
+
+    FVD = calculate_frechet_distance(mu1=np.mean(act_gen, axis=0),
+                                     sigma1=np.cov(act_gen, rowvar=False),
+                                      mu2=np.mean(act_orig, axis=0),
+                                       sigma2=np.cov(act_orig, rowvar=False))
+    #FVD = calc_FVD(I3D, seq_orig, seq_gen, batch_size=1) if mode=='FVD' else calc_DTFVD(I3D, seq_orig, seq_gen, 40, True)
     return FVD
 
 
@@ -108,7 +132,34 @@ def evaluate_FVD_prior(dloader, cINN, decoder, I3D, z_dim, opt, epoch, mode, con
     wandb.log({"eval_video": wandb.Video(video, fps=3,  format="gif")})
     torch.cuda.empty_cache()
 
-    FVD = calc_FVD(I3D, seq_orig, seq_gen, 20) if mode=='FVD' else calc_DTFVD(I3D, seq_orig, seq_gen, 40, True)
+    seq_gen1, seq_gen2, seq_gen3, seq_gen4  = torch.chunk(seq_gen, 4, dim=0)
+    seq_orig1, seq_orig2, seq_orig3, seq_orig4 = torch.chunk(seq_orig, 4, dim=0)
+    
+    assert (seq_gen1.shape == seq_orig1.shape) and (seq_gen2.shape == seq_orig2.shape) and \
+            (seq_gen3.shape == seq_orig3.shape) and (seq_gen4.shape == seq_orig4.shape), \
+        'n_sample error'
+    
+    batch_size=1
+    #print("shape", seq_gen1.shape) #torch.Size([704, 16, 3, 64, 64])
+
+    act1_orig, act1_gen = compute_activations(seq_gen1, seq_orig1, batch_size=batch_size) #print("act1_orig", act1_orig.shape) #act1_orig (704, 400)
+    act2_orig, act2_gen = compute_activations(seq_gen2, seq_orig2, batch_size=batch_size)     #print("act1_gen", act1_gen.shape)   #act1_gen (704, 400)
+    act3_orig, act3_gen = compute_activations(seq_gen3, seq_orig3, batch_size=batch_size)     #print("act4_orig", act4_orig.shape) #act4_orig (704, 400)
+    act4_orig, act4_gen = compute_activations(seq_gen4, seq_orig4, batch_size=batch_size)     #print("act4_gen", act4_gen.shape)   #act4_gen (704, 400)
+
+    act_orig = np.concatenate((act1_orig, act2_orig, act3_orig, act4_orig), axis=0)
+    del act1_orig, act2_orig, act3_orig, act4_orig
+    act_gen = np.concatenate((act1_gen, act2_gen, act3_gen, act4_gen), axis=0)
+    del act1_gen, act2_gen, act3_gen, act4_gen
+    #print("act_orig", act_orig.shape)  #act_orig (2816, 400)
+    #print("act_gen", act_gen.shape)    #act_gen (2816, 400)
+
+    FVD = calculate_frechet_distance(mu1=np.mean(act_gen, axis=0),
+                                     sigma1=np.cov(act_gen, rowvar=False),
+                                      mu2=np.mean(act_orig, axis=0),
+                                       sigma2=np.cov(act_orig, rowvar=False))
+
+    #FVD = calc_FVD(I3D, seq_orig, seq_gen, 20) if mode=='FVD' else calc_DTFVD(I3D, seq_orig, seq_gen, 40, True)
     return FVD
 
 

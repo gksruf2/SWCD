@@ -5,15 +5,15 @@ Flow:
 
 Conditioning_Model:
   z_dim: 64
-  checkpoint_name: 'Encoder_stage2'
-  model_name: 'save_name_AE_conditioning/'
-  model_path: 'path_AE_conditioning'
+  checkpoint_name: 'encoder_stage2'
+  model_name: 'Stage2_AE_BAIR_Date-2023-4-14-17-3-34_20230328'
+  model_path: '/data/gksruf293/swcd/image2video-synthesis-using-cINNs-main/stage2_VAE/saveAE/'
 
 First_stage_model:
   checkpoint_encoder: 'best_PFVD_ENC'
   checkpoint_decoder: 'best_PFVD_GEN'
-  model_name: 'save_name_stage1/'
-  model_path: 'path_stage1'
+  model_name: 'Stage1_BAIR_Date-2023-4-11-23-57-17_20230328'
+  model_path: '/data/gksruf293/swcd/image2video-synthesis-using-cINNs-main/stage1_VAE/save/'
 
 Training:
   n_epochs: 31
@@ -29,15 +29,16 @@ Training:
   beta1: 0.9
   beta2: 0.99
   amsgrad: True
-  savename: 'INSERT_NAME_HERE'
-  save_path: 'INSERT_PATH_HERE'
+  savename: '20230415'
+  save_path: '/data/gksruf293/swcd/image2video-synthesis-using-cINNs-main/stage2_cINN/save/'
+  reload_path: '/data/gksruf293/swcd/image2video-synthesis-using-cINNs-main/stage2_cINN/save/Stage2_BAIR_Date-2023-4-15-14-6-39_20230415'
 
 Data:
   sequence_length: 17
   img_size: 64
   dataset: 'BAIR'
   aug: True
-  data_path: 'INSERT_DATA_PATH_HERE'
+  data_path: '/data/gksruf293/swcd/image2video-synthesis-using-cINNs-main/download_bair/'
   Augmentation:
     brightness: 0.1
     contrast: 0.1
@@ -46,6 +47,6 @@ Data:
     prob_hflip: 0.5
 
 Logging:
-  entity: 'INSERT_WANDB_NAME'
-  project: "INSERT_PROJECT_NAME"
+  entity: '0d96660e1ccd97c40207a831c91de88b8763fa7b'
+  project: "SWCD"
   mode: 'online'

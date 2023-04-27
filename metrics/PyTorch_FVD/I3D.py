@@ -291,10 +291,14 @@ class I3D(torch.nn.Module):
         out = self.avg_pool(out)
         out = self.dropout(out)
         out = self.conv3d_0c_1x1(out)
+        #print("lin294", out.shape)  #torch.Size([1, 400, 1, 1, 1])
         out = out.squeeze(3)
+        #print("lin297", out.shape)  #torch.Size([1, 400, 1, 1])
         out = out.squeeze(3)
+        #print("lin299", out.shape)  #torch.Size([1, 400, 1])
         out = out.mean(2)
         out_logits = out
         out = self.softmax(out_logits)
+        #print("lin303", out.shape)  #torch.Size([1, 400])
         return out, out_logits
 

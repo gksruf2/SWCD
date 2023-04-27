@@ -1,11 +1,220 @@
 import torch.nn as nn
 import torch
+import torch.nn.functional as F
 import numpy as np
 import wandb
 
-from pytorch_lightning.metrics.functional import ssim, psnr
+from typing import Optional, Sequence, Tuple
+def _check_same_shape(pred: torch.Tensor, target: torch.Tensor):
+    """ Check that predictions and target have the same shape, else raise error """
+    if pred.shape != target.shape:
+        raise RuntimeError("Predictions and targets are expected to have the same shape")
+    
+def reduce(to_reduce: torch.Tensor, reduction: str) -> torch.Tensor:
+    """
+    Reduces a given tensor by a given reduction method
+    Args:
+        to_reduce : the tensor, which shall be reduced
+       reduction :  a string specifying the reduction method ('elementwise_mean', 'none', 'sum')
+    Return:
+        reduced Tensor
+    Raise:
+        ValueError if an invalid reduction parameter was given
+    """
+    if reduction == "elementwise_mean":
+        return torch.mean(to_reduce)
+    if reduction == "none":
+        return to_reduce
+    if reduction == "sum":
+        return torch.sum(to_reduce)
+    raise ValueError("Reduction parameter unknown.")
+
+def _gaussian(kernel_size: int, sigma: int, dtype: torch.dtype, device: torch.device):
+    dist = torch.arange(start=(1 - kernel_size) / 2, end=(1 + kernel_size) / 2, step=1, dtype=dtype, device=device)
+    gauss = torch.exp(-torch.pow(dist / sigma, 2) / 2)
+    return (gauss / gauss.sum()).unsqueeze(dim=0)  # (1, kernel_size)
+
+
+def _gaussian_kernel(channel: int, kernel_size: Sequence[int], sigma: Sequence[float],
+                     dtype: torch.dtype, device: torch.device):
+    gaussian_kernel_x = _gaussian(kernel_size[0], sigma[0], dtype, device)
+    gaussian_kernel_y = _gaussian(kernel_size[1], sigma[1], dtype, device)
+    kernel = torch.matmul(gaussian_kernel_x.t(), gaussian_kernel_y)  # (kernel_size, 1) * (1, kernel_size)
+
+    return kernel.expand(channel, 1, kernel_size[0], kernel_size[1])
+
+def _ssim_update(
+    preds: torch.Tensor,
+    target: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    if preds.dtype != target.dtype:
+        raise TypeError(
+            "Expected `preds` and `target` to have the same data type."
+            f" Got pred: {preds.dtype} and target: {target.dtype}."
+        )
+    _check_same_shape(preds, target)
+    if len(preds.shape) != 4:
+        raise ValueError(
+            "Expected `preds` and `target` to have BxCxHxW shape."
+            f" Got pred: {preds.shape} and target: {target.shape}."
+        )
+    return preds, target
+
+
+def _ssim_compute(
+    preds: torch.Tensor,
+    target: torch.Tensor,
+    kernel_size: Sequence[int] = (11, 11),
+    sigma: Sequence[float] = (1.5, 1.5),
+    reduction: str = "elementwise_mean",
+    data_range: Optional[float] = None,
+    k1: float = 0.01,
+    k2: float = 0.03,
+):
+    if len(kernel_size) != 2 or len(sigma) != 2:
+        raise ValueError(
+            "Expected `kernel_size` and `sigma` to have the length of two."
+            f" Got kernel_size: {len(kernel_size)} and sigma: {len(sigma)}."
+        )
+
+    if any(x % 2 == 0 or x <= 0 for x in kernel_size):
+        raise ValueError(f"Expected `kernel_size` to have odd positive number. Got {kernel_size}.")
+
+    if any(y <= 0 for y in sigma):
+        raise ValueError(f"Expected `sigma` to have positive number. Got {sigma}.")
+
+    if data_range is None:
+        data_range = max(preds.max() - preds.min(), target.max() - target.min())
+
+    c1 = pow(k1 * data_range, 2)
+    c2 = pow(k2 * data_range, 2)
+    device = preds.device
+
+    channel = preds.size(1)
+    dtype = preds.dtype
+    kernel = _gaussian_kernel(channel, kernel_size, sigma, dtype, device)
+    pad_w = (kernel_size[0] - 1) // 2
+    pad_h = (kernel_size[1] - 1) // 2
+
+    preds = F.pad(preds, (pad_w, pad_w, pad_h, pad_h), mode='reflect')
+    target = F.pad(target, (pad_w, pad_w, pad_h, pad_h), mode='reflect')
+
+    input_list = torch.cat((preds, target, preds * preds, target * target, preds * target))  # (5 * B, C, H, W)
+    outputs = F.conv2d(input_list, kernel, groups=channel)
+    output_list = [outputs[x * preds.size(0): (x + 1) * preds.size(0)] for x in range(len(outputs))]
+
+    mu_pred_sq = output_list[0].pow(2)
+    mu_target_sq = output_list[1].pow(2)
+    mu_pred_target = output_list[0] * output_list[1]
+
+    sigma_pred_sq = output_list[2] - mu_pred_sq
+    sigma_target_sq = output_list[3] - mu_target_sq
+    sigma_pred_target = output_list[4] - mu_pred_target
+
+    upper = 2 * sigma_pred_target + c2
+    lower = sigma_pred_sq + sigma_target_sq + c2
+
+    ssim_idx = ((2 * mu_pred_target + c1) * upper) / ((mu_pred_sq + mu_target_sq + c1) * lower)
+    ssim_idx = ssim_idx[..., pad_h:-pad_h, pad_w:-pad_w]
+
+    return reduce(ssim_idx, reduction)
+
+def ssim(
+    preds: torch.Tensor,
+    target: torch.Tensor,
+    kernel_size: Sequence[int] = (11, 11),
+    sigma: Sequence[float] = (1.5, 1.5),
+    reduction: str = "elementwise_mean",
+    data_range: Optional[float] = None,
+    k1: float = 0.01,
+    k2: float = 0.03,
+) -> torch.Tensor:
+    """
+    Computes Structual Similarity Index Measure
+    Args:
+        pred: estimated image
+        target: ground truth image
+        kernel_size: size of the gaussian kernel (default: (11, 11))
+        sigma: Standard deviation of the gaussian kernel (default: (1.5, 1.5))
+        reduction: a method to reduce metric score over labels.
+            - ``'elementwise_mean'``: takes the mean (default)
+            - ``'sum'``: takes the sum
+            - ``'none'``: no reduction will be applied
+        data_range: Range of the image. If ``None``, it is determined from the image (max - min)
+        k1: Parameter of SSIM. Default: 0.01
+        k2: Parameter of SSIM. Default: 0.03
+    Return:
+        Tensor with SSIM score
+    Example:
+        >>> preds = torch.rand([16, 1, 16, 16])
+        >>> target = preds * 0.75
+        >>> ssim(preds, target)
+        tensor(0.9219)
+    """
+    preds, target = _ssim_update(preds, target)
+    return _ssim_compute(preds, target, kernel_size, sigma, reduction, data_range, k1, k2)
+
+def _psnr_compute(
+    sum_squared_error: torch.Tensor,
+    n_obs: int,
+    data_range: float,
+    base: float = 10.0,
+    reduction: str = 'elementwise_mean',
+) -> torch.Tensor:
+    psnr_base_e = 2 * torch.log(data_range) - torch.log(sum_squared_error / n_obs)
+    psnr = psnr_base_e * (10 / torch.log(torch.tensor(base)))
+    return psnr
+
+def _psnr_update(preds: torch.Tensor, target: torch.Tensor) -> Tuple[torch.Tensor, int]:
+    sum_squared_error = torch.sum(torch.pow(preds - target, 2))
+    n_obs = target.numel()
+    return sum_squared_error, n_obs
+
+def psnr(
+    preds: torch.Tensor,
+    target: torch.Tensor,
+    data_range: Optional[float] = None,
+    base: float = 10.0,
+    reduction: str = 'elementwise_mean',
+) -> torch.Tensor:
+    """
+    Computes the peak signal-to-noise ratio
+
+    Args:
+        preds: estimated signal
+        target: groun truth signal
+        data_range: the range of the data. If None, it is determined from the data (max - min)
+        base: a base of a logarithm to use (default: 10)
+        reduction: a method to reduce metric score over labels.
+
+            - ``'elementwise_mean'``: takes the mean (default)
+            - ``'sum'``: takes the sum
+            - ``'none'``: no reduction will be applied
+        return_state: returns a internal state that can be ddp reduced
+            before doing the final calculation
+
+    Return:
+        Tensor with PSNR score
+
+    Example:
+
+        >>> pred = torch.tensor([[0.0, 1.0], [2.0, 3.0]])
+        >>> target = torch.tensor([[3.0, 2.0], [1.0, 0.0]])
+        >>> psnr(pred, target)
+        tensor(2.5527)
+
+    """
+    if data_range is None:
+        data_range = target.max() - target.min()
+    else:
+        data_range = torch.tensor(float(data_range))
+    sum_squared_error, n_obs = _psnr_update(preds, target)
+    return _psnr_compute(sum_squared_error, n_obs, data_range, base, reduction)
+
+#from pytorch_lightning.metrics.functional import ssim, psnr
 from stage2_cINN.AE.modules.LPIPS import LPIPS
 
+#https://gaussian37.github.io/vision-concept-ssim/
 
 def KL(mu, logvar):
     ## computes KL-divergence loss between NormalGaussian and parametrized learned distribution
@@ -63,7 +272,7 @@ class Backward(nn.Module):
 
     def forward(self, decoder, encoder, disc_t, disc_s, seq_o, optimizers, epoch, logger):
 
-        opt_all, opt_d_t, opt_d_s = optimizers
+        opt_all, opt_d_t, opt_d_s = optimizers      # [optimizer_AE, optimizer_3Dnet, optimizer_2Dnet]
 
         ## Perform forward pass through network
         seq_orig = seq_o[:, 1:]

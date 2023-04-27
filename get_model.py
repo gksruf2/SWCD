@@ -56,16 +56,22 @@ class Model(torch.nn.Module):
         """
 
         ## Draw a residual from Gaussian Normal Distribution
-        residual = torch.randn(x_0.size(0), self.z_dim).cuda()
+        residual = torch.randn(x_0.size(0), self.z_dim).cuda()  
+        # (batch size x z의 차원 수)만큼 가우시안 랜덤 샘플링(VAE-)
+        # z의 차원은 latent vector가 얼만큼의 정보를 얻게 하는지 정한다.
+        # residual은 x_0을 비디오로 복원시킬 수 있는 정보.
 
         ## Define conditioning
+        # CVAE: Conditional Variational Autoencoder
         cond = [x_0, cond]
 
         ## Use cINN with residual and x_0 (start frame) to obtain the video representation z
+        # T_theta(v, x_0, cond) = z
         z = self.flow(residual, cond, reverse=True).view(x_0.size(0), -1)
 
         ## Render sequence using generator/decoder
         seq = self.decoder(x_0, z)
+        # q(x|z), seq은 latent vector z를 Decorder에 넣어서 나온 비디오 생성본
 
         ## Apply multiple times if longer sequence is needed
         while seq.shape[1] < self.vid_length:
@@ -74,7 +80,7 @@ class Model(torch.nn.Module):
 
         return seq[:self.vid_length]
 
-    def transfer(self, seq_query, x_0):
+    def transfer(self, seq_query, x_0):     # 한 영상의 motion을 다른 영상(gen)의 motion에 적용
         """
             Input
                 - query sequence seq_query of shape (BS, T, C, H, W)
